@@ -109,3 +109,23 @@ def get_distinct_user_ids():
     cur.close()
     conn.close()
     return [r[0] for r in rows]
+
+
+def get_key_summary():
+    """每個記事本(個人/群組) key 的筆數與最新紀錄時間，給總覽頁用。"""
+    if not DATABASE_URL:
+        return []
+    conn = _conn()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT user_id, COUNT(*), MAX(created_at)
+        FROM diary_entries
+        GROUP BY user_id
+        ORDER BY MAX(created_at) DESC
+        """
+    )
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return [{"key": r[0], "count": r[1], "last_at": r[2].isoformat()} for r in rows]

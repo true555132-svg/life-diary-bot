@@ -301,6 +301,38 @@ def view_entries(user_id):
     return render_template_string(VIEW_HTML, entries=entries, days=days)
 
 
+ADMIN_HTML = """<!DOCTYPE html>
+<html lang="zh-TW"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>生活紀錄 - 總覽</title>
+<style>
+body{font-family:-apple-system,sans-serif;background:#f5f6f8;margin:0;padding:16px}
+.row{background:#fff;border-radius:10px;padding:12px 14px;margin-bottom:10px;box-shadow:0 1px 2px rgba(0,0,0,.08);display:flex;justify-content:space-between;align-items:center}
+.row a{color:#0d6efd;text-decoration:none;font-weight:600}
+.row .meta{font-size:12px;color:#9aa0a6}
+.key{font-size:11px;color:#888;word-break:break-all;margin-top:2px}
+</style></head><body>
+<h2>生活紀錄總覽（{{rows|length}} 本記事本）</h2>
+{% for row in rows %}
+<div class="row">
+  <div>
+    <a href="/view/{{row.key}}?key={{admin_key}}">{{row.count}} 筆紀錄</a>
+    <div class="key">{{row.key}}</div>
+  </div>
+  <div class="meta">最新：{{row.last_at}}</div>
+</div>
+{% endfor %}
+</body></html>"""
+
+
+@app.route("/admin")
+def admin_overview():
+    if request.args.get("key", "") != ADMIN_KEY:
+        abort(403)
+    rows = db.get_key_summary()
+    return render_template_string(ADMIN_HTML, rows=rows, admin_key=ADMIN_KEY)
+
+
 @app.route("/")
 def index():
     return "Life Diary Bot is running."
