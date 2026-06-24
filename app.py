@@ -97,6 +97,37 @@ def push_text(user_id: str, text: str):
         )
 
 
+def get_record_key(event) -> str:
+    """群組/聊天室訊息共用同一本記事本（用 group_id/room_id 當 key），個人訊息用 user_id。"""
+    src = event.source
+    if src.type == "group":
+        return src.group_id
+    if src.type == "room":
+        return src.room_id
+    return src.user_id
+
+
+def get_sender_name(event) -> str:
+    """群組/聊天室裡標註是誰寫的，個人對話則不需要。"""
+    src = event.source
+    sender_user_id = getattr(src, "user_id", "")
+    if not sender_user_id or src.type == "user":
+        return ""
+    try:
+        import urllib.request
+        if src.type == "group":
+            url = f"https://api.line.me/v2/bot/group/{src.group_id}/member/{sender_user_id}"
+        elif src.type == "room":
+            url = f"https://api.line.me/v2/bot/room/{src.room_id}/member/{sender_user_id}"
+        else:
+            return ""
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return json.loads(r.read()).get("displayName", "")
+    except Exception:
+        return ""
+
+
 def check_keyword_alerts(user_id: str, text: str):
     for keyword, cfg in KEYWORD_ALERTS.items():
         if keyword not in text:
@@ -125,19 +156,21 @@ def callback():
 
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_text(event):
-    user_id = event.source.user_id
+    key = get_record_key(event)
     text = event.message.text.strip()
 
     if is_analyze_command(text):
         days, label = detect_period(text)
-        entries = db.get_entries(user_id, days)
+        entries = db.get_entries(key, days)
         summary = analyzer.analyze(entries, label)
         reply_text(event.reply_token, summary)
         return
 
+    sender = get_sender_name(event)
+    content = f"[{sender}] {text}" if sender else text
     tags, mood = analyzer.classify_entry(text)
-    db.insert_entry(user_id, "text", content=text, tags=tags, mood_score=mood)
-    threading.Thread(target=check_keyword_alerts, args=(user_id, text), daemon=True).start()
+    db.insert_entry(key, "text", content=content, tags=tags, mood_score=mood)
+    threading.Thread(target=check_keyword_alerts, args=(key, text), daemon=True).start()
 
     meta = []
     if tags:
@@ -151,7 +184,7 @@ def handle_text(event):
 @handler.add(MessageEvent, message=ImageMessageContent)
 def handle_image(event):
     import urllib.request
-    user_id = event.source.user_id
+    key = get_record_key(event)
     msg_id = event.message.id
     image_url = ""
     try:
@@ -165,10 +198,12 @@ def handle_image(event):
         print(f"[Image Download Error] {e}")
 
     caption = analyzer.describe_image(image_url) if image_url else ""
+    sender = get_sender_name(event)
+    content = f"[{sender}] {caption}" if sender and caption else caption
     tags, mood = analyzer.classify_entry(caption) if caption else ([], None)
-    db.insert_entry(user_id, "image", content=caption, image_url=image_url, tags=tags, mood_score=mood)
+    db.insert_entry(key, "image", content=content, image_url=image_url, tags=tags, mood_score=mood)
     if caption:
-        threading.Thread(target=check_keyword_alerts, args=(user_id, caption), daemon=True).start()
+        threading.Thread(target=check_keyword_alerts, args=(key, caption), daemon=True).start()
     reply_text(event.reply_token, f"已記錄這張照片 📷\n{caption}" if caption else "已記錄這張照片 📷")
 
 
