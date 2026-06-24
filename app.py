@@ -279,8 +279,14 @@ body{font-family:-apple-system,sans-serif;background:#f5f6f8;margin:0;padding:16
 .entry-meta{margin-top:4px}
 .tag-pill{display:inline-block;background:#e8f4fd;color:#0d6efd;font-size:10px;padding:2px 7px;border-radius:10px;margin-right:4px}
 .mood-pill{display:inline-block;background:#fff3cd;color:#856404;font-size:10px;padding:2px 7px;border-radius:10px}
+.analyze-bar{margin-bottom:14px;display:flex;gap:6px}
+.analyze-btn{background:#0d6efd;color:#fff;text-decoration:none;font-size:12px;padding:6px 12px;border-radius:16px;font-weight:600}
 </style></head><body>
 <h2>生活紀錄（最近 {{days}} 天）</h2>
+<div class="analyze-bar">
+  <a class="analyze-btn" href="/analyze/{{user_id}}?key={{admin_key}}&days=7">分析最近七天</a>
+  <a class="analyze-btn" href="/analyze/{{user_id}}?key={{admin_key}}&days=30">分析這個月</a>
+</div>
 {% for e in entries %}
 <div class="entry">
   <div class="entry-time">{{e.created_at}}</div>
@@ -302,7 +308,33 @@ def view_entries(user_id):
     days = int(request.args.get("days", 30))
     entries = db.get_entries(user_id, days)
     entries = list(reversed(entries))
-    return render_template_string(VIEW_HTML, entries=entries, days=days)
+    return render_template_string(VIEW_HTML, entries=entries, days=days, user_id=user_id, admin_key=ADMIN_KEY)
+
+
+ANALYZE_HTML = """<!DOCTYPE html>
+<html lang="zh-TW"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>分析結果</title>
+<style>
+body{font-family:-apple-system,sans-serif;background:#f5f6f8;margin:0;padding:16px}
+.box{background:#fff;border-radius:10px;padding:16px;white-space:pre-wrap;font-size:14px;line-height:1.7;box-shadow:0 1px 2px rgba(0,0,0,.08)}
+a{font-size:12px;color:#0d6efd}
+</style></head><body>
+<h2>{{label}}分析結果</h2>
+<p><a href="/view/{{user_id}}?key={{admin_key}}">&larr; 回紀錄列表</a></p>
+<div class="box">{{summary}}</div>
+</body></html>"""
+
+
+@app.route("/analyze/<user_id>")
+def analyze_view(user_id):
+    if request.args.get("key", "") != ADMIN_KEY:
+        abort(403)
+    days = int(request.args.get("days", 7))
+    label = "這個月" if days >= 30 else ("今天" if days <= 1 else "最近七天")
+    entries = enrich_image_entries(db.get_entries(user_id, days))
+    summary = analyzer.analyze(entries, label)
+    return render_template_string(ANALYZE_HTML, summary=summary, label=label, user_id=user_id, admin_key=ADMIN_KEY)
 
 
 ADMIN_HTML = """<!DOCTYPE html>
