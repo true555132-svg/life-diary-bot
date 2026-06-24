@@ -128,6 +128,21 @@ def get_sender_name(event) -> str:
         return ""
 
 
+def enrich_image_entries(entries: list) -> list:
+    """分析時才補生成圖片描述/標籤/心情，並快取回資料庫，避免每次上傳照片都花錢。"""
+    for e in entries:
+        if e["entry_type"] == "image" and e["image_url"] and "[圖片]" in e["content"]:
+            caption = analyzer.describe_image(e["image_url"])
+            if not caption:
+                continue
+            prefix = e["content"].split("] ", 1)[0] + "] " if e["content"].startswith("[") else ""
+            new_content = f"{prefix}{caption}"
+            tags, mood = analyzer.classify_entry(caption)
+            db.update_entry_content(e["id"], new_content, tags, mood)
+            e["content"], e["tags"], e["mood_score"] = new_content, tags, mood
+    return entries
+
+
 def check_keyword_alerts(user_id: str, text: str):
     for keyword, cfg in KEYWORD_ALERTS.items():
         if keyword not in text:
@@ -161,24 +176,16 @@ def handle_text(event):
 
     if is_analyze_command(text):
         days, label = detect_period(text)
-        entries = db.get_entries(key, days)
+        entries = enrich_image_entries(db.get_entries(key, days))
         summary = analyzer.analyze(entries, label)
         reply_text(event.reply_token, summary)
         return
 
     sender = get_sender_name(event)
     content = f"[{sender}] {text}" if sender else text
-    tags, mood = analyzer.classify_entry(text)
-    db.insert_entry(key, "text", content=content, tags=tags, mood_score=mood)
+    db.insert_entry(key, "text", content=content)
     threading.Thread(target=check_keyword_alerts, args=(key, text), daemon=True).start()
-
-    meta = []
-    if tags:
-        meta.append("/".join(tags))
-    if mood is not None:
-        meta.append(f"心情{mood}/5")
-    suffix = f"（{', '.join(meta)}）" if meta else ""
-    reply_text(event.reply_token, f"已記錄 📝{suffix}")
+    reply_text(event.reply_token, "已記錄 📝")
 
 
 @handler.add(MessageEvent, message=ImageMessageContent)
@@ -197,14 +204,10 @@ def handle_image(event):
     except Exception as e:
         print(f"[Image Download Error] {e}")
 
-    caption = analyzer.describe_image(image_url) if image_url else ""
     sender = get_sender_name(event)
-    content = f"[{sender}] {caption}" if sender and caption else caption
-    tags, mood = analyzer.classify_entry(caption) if caption else ([], None)
-    db.insert_entry(key, "image", content=content, image_url=image_url, tags=tags, mood_score=mood)
-    if caption:
-        threading.Thread(target=check_keyword_alerts, args=(key, caption), daemon=True).start()
-    reply_text(event.reply_token, f"已記錄這張照片 📷\n{caption}" if caption else "已記錄這張照片 📷")
+    content = f"[{sender}] [圖片]" if sender else "[圖片]"
+    db.insert_entry(key, "image", content=content, image_url=image_url)
+    reply_text(event.reply_token, "已記錄這張照片 📷")
 
 
 # ── 主動分析（排程） ──────────────────────────────────────
@@ -215,6 +218,7 @@ def run_scheduled_analysis(days: int, label: str, header: str):
         entries = db.get_entries(uid, days)
         if not entries:
             continue
+        entries = enrich_image_entries(entries)
         summary = analyzer.analyze(entries, label)
         try:
             push_text(uid, f"{header}\n\n{summary}")

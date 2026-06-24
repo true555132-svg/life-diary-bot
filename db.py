@@ -61,7 +61,7 @@ def get_entries(user_id: str, since_days: int):
     cur = conn.cursor()
     cur.execute(
         """
-        SELECT created_at, entry_type, content, image_url, tags, mood_score
+        SELECT id, created_at, entry_type, content, image_url, tags, mood_score
         FROM diary_entries
         WHERE user_id=%s AND created_at >= now() - interval '%s days'
         ORDER BY created_at ASC
@@ -73,12 +73,27 @@ def get_entries(user_id: str, since_days: int):
     conn.close()
     return [
         {
-            "created_at": r[0].isoformat(), "entry_type": r[1], "content": r[2] or "",
-            "image_url": r[3] or "", "tags": (r[4] or "").split(",") if r[4] else [],
-            "mood_score": r[5],
+            "id": r[0], "created_at": r[1].isoformat(), "entry_type": r[2], "content": r[3] or "",
+            "image_url": r[4] or "", "tags": (r[5] or "").split(",") if r[5] else [],
+            "mood_score": r[6],
         }
         for r in rows
     ]
+
+
+def update_entry_content(entry_id: int, content: str, tags: list = None, mood_score: int = None):
+    if not DATABASE_URL:
+        return
+    with _lock:
+        conn = _conn()
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE diary_entries SET content=%s, tags=%s, mood_score=%s WHERE id=%s",
+            (content, ",".join(tags or []), mood_score, entry_id),
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
 
 
 def count_keyword_occurrences(user_id: str, keyword: str, since_days: int) -> int:
