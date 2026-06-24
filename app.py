@@ -40,6 +40,14 @@ PERIOD_KEYWORDS = [
 DEFAULT_PERIOD_DAYS = 7
 DEFAULT_PERIOD_LABEL = "最近七天"
 
+# 關鍵字提醒：在 since_days 天內出現次數達到 threshold 時，提醒一次
+KEYWORD_ALERTS = {
+    "頭痛": {"threshold": 3, "since_days": 14},
+    "失眠": {"threshold": 3, "since_days": 14},
+    "壓力": {"threshold": 3, "since_days": 14},
+    "焦慮": {"threshold": 3, "since_days": 14},
+}
+
 
 def upload_image_to_supabase(filename: str, data: bytes, content_type: str = "image/jpeg") -> str:
     if not SUPABASE_SERVICE_KEY:
@@ -89,6 +97,19 @@ def push_text(user_id: str, text: str):
         )
 
 
+def check_keyword_alerts(user_id: str, text: str):
+    for keyword, cfg in KEYWORD_ALERTS.items():
+        if keyword not in text:
+            continue
+        count = db.count_keyword_occurrences(user_id, keyword, cfg["since_days"])
+        if count == cfg["threshold"]:
+            push_text(
+                user_id,
+                f"⚠️ 最近 {cfg['since_days']} 天內你提到「{keyword}」已經 {count} 次了，"
+                f"要不要留意一下，或考慮找人聊聊/就醫？",
+            )
+
+
 @app.route("/callback", methods=["POST"])
 def callback():
     signature = request.headers.get("X-Line-Signature", "")
@@ -114,8 +135,17 @@ def handle_text(event):
         reply_text(event.reply_token, summary)
         return
 
-    db.insert_entry(user_id, "text", content=text)
-    reply_text(event.reply_token, "已記錄 📝")
+    tags, mood = analyzer.classify_entry(text)
+    db.insert_entry(user_id, "text", content=text, tags=tags, mood_score=mood)
+    threading.Thread(target=check_keyword_alerts, args=(user_id, text), daemon=True).start()
+
+    meta = []
+    if tags:
+        meta.append("/".join(tags))
+    if mood is not None:
+        meta.append(f"心情{mood}/5")
+    suffix = f"（{', '.join(meta)}）" if meta else ""
+    reply_text(event.reply_token, f"已記錄 📝{suffix}")
 
 
 @handler.add(MessageEvent, message=ImageMessageContent)
@@ -135,7 +165,10 @@ def handle_image(event):
         print(f"[Image Download Error] {e}")
 
     caption = analyzer.describe_image(image_url) if image_url else ""
-    db.insert_entry(user_id, "image", content=caption, image_url=image_url)
+    tags, mood = analyzer.classify_entry(caption) if caption else ([], None)
+    db.insert_entry(user_id, "image", content=caption, image_url=image_url, tags=tags, mood_score=mood)
+    if caption:
+        threading.Thread(target=check_keyword_alerts, args=(user_id, caption), daemon=True).start()
     reply_text(event.reply_token, f"已記錄這張照片 📷\n{caption}" if caption else "已記錄這張照片 📷")
 
 
@@ -204,6 +237,9 @@ body{font-family:-apple-system,sans-serif;background:#f5f6f8;margin:0;padding:16
 .entry-time{font-size:11px;color:#9aa0a6;margin-bottom:4px}
 .entry-content{font-size:14px;color:#1a1a1a;white-space:pre-wrap}
 .entry img{max-width:240px;border-radius:8px;display:block;margin-top:6px}
+.entry-meta{margin-top:4px}
+.tag-pill{display:inline-block;background:#e8f4fd;color:#0d6efd;font-size:10px;padding:2px 7px;border-radius:10px;margin-right:4px}
+.mood-pill{display:inline-block;background:#fff3cd;color:#856404;font-size:10px;padding:2px 7px;border-radius:10px}
 </style></head><body>
 <h2>生活紀錄（最近 {{days}} 天）</h2>
 {% for e in entries %}
@@ -211,6 +247,10 @@ body{font-family:-apple-system,sans-serif;background:#f5f6f8;margin:0;padding:16
   <div class="entry-time">{{e.created_at}}</div>
   <div class="entry-content">{{e.content}}</div>
   {% if e.image_url %}<img src="{{e.image_url}}">{% endif %}
+  <div class="entry-meta">
+    {% for t in e.tags %}<span class="tag-pill">{{t}}</span>{% endfor %}
+    {% if e.mood_score %}<span class="mood-pill">心情 {{e.mood_score}}/5</span>{% endif %}
+  </div>
 </div>
 {% endfor %}
 </body></html>"""
